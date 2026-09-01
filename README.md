@@ -77,7 +77,9 @@ fixed-arrival queueing are intentionally excluded. Run it with one Julia
 thread; select `cpu`, `amdgpu`, or `cuda`. Accelerator runs default to one
 captured device graph for the complete frame, while CPU runs use direct stream
 execution. Set `REVOLT_BENCH_EXECUTION=stream` to make an explicit accelerator
-diagnostic comparison:
+diagnostic comparison. The harness defaults to 10 CPU warmup cycles and 200
+accelerator warmup cycles so accelerator measurements exclude clock ramp-up
+and first-replay effects:
 
 ```bash
 julia --startup-file=no --project=benchmark \
@@ -103,13 +105,20 @@ deadline claims.
 |---|---|---:|---:|---:|---:|
 | CPU | stream | 109.53 frames/s | 109.49 cycles/s | 8.974 / 9.383 / 13.411 ms | 0 |
 | AMDGPU | captured HIP graph | 676.42 frames/s | 664.83 cycles/s | 1.439 / 1.667 / 2.062 ms | 0 |
-| CUDA | captured CUDA graph | 78.75 frames/s | 41.01 cycles/s | 12.720 / 13.089 / 17.031 ms | 32 |
+| CUDA | captured CUDA graph | 1458.53 frames/s | 1373.17 cycles/s | 0.669 / 0.760 / 0.914 ms | 0 |
 
-Each row contains three fresh prepared runs of 100 measured frames after ten
-warmup frames per run. The [CPU](benchmark/results/2026-09-01-cpu.toml),
+Each row contains three fresh prepared runs of 100 measured frames. CPU and
+AMDGPU used ten warmup frames per run; the corrected CUDA result used 200. The
+[CPU](benchmark/results/2026-09-01-cpu.toml),
 [AMDGPU](benchmark/results/2026-09-01-amdgpu.toml), and
 [CUDA](benchmark/results/2026-09-01-cuda.toml) artifacts contain the raw
 samples and provenance.
+
+The earlier CUDA artifact used CUDA.jl's task-coordinated stream wait at every
+captured completion boundary. AdaptiveOpticsSim `aa3d934` selects direct
+blocking stream completion only for capture-qualified execution, which cannot
+contain host callbacks. The corrected row changes that completion mechanism;
+the instrument graph and timed service boundary are unchanged.
 
 CPU and AMDGPU ran on `rtc-devel` with an AMD Ryzen 7 6800H and its integrated
 Rembrandt GPU. CUDA ran under WSL2 on `DGAMROTH-XPS` with an Intel Core
