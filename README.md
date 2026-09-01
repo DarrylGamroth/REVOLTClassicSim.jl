@@ -36,3 +36,21 @@ frame.
 ```bash
 julia --startup-file=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
+
+The opt-in process test calibrates this package's complete 277-command model
+and closes its atmospheric loop through an independent pyRTC process using
+pyRTC-compatible POSIX shared memory. Install the pinned official pyRTC
+revision into an isolated Python environment, then run:
+
+```bash
+python3 -m venv .venv-pyrtc
+.venv-pyrtc/bin/python -m pip install --upgrade pip
+.venv-pyrtc/bin/python -m pip install -r test/pyrtc/requirements.txt
+
+export PYRTC_PYTHON="$PWD/.venv-pyrtc/bin/python"
+REVOLT_CLASSIC_PYRTC_TESTS=1 julia --startup-file=no --project=. \
+  -e 'using Pkg; Pkg.test()'
+```
+
+The Python environment is not part of the package runtime and the test is not
+run by default because it generates a full simulated interaction matrix.

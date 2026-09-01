@@ -78,3 +78,20 @@ end
     @test all(isfinite, hil_frame_buffer(calibration.boundary))
     @test sum(hil_frame_buffer(calibration.boundary)) > 0
 end
+
+@testset "REVOLT Classic science diagnostics" begin
+    diagnostics = prepare_science_diagnostics()
+    zero_opd = zeros(Float32, 240, 240)
+    update_science_diagnostics!(diagnostics, zero_opd, zero_opd)
+    @test size(science_pupil_support(diagnostics)) == (240, 240)
+    @test size(open_loop_psf(diagnostics)) == (480, 480)
+    @test size(closed_loop_psf(diagnostics)) == (480, 480)
+    @test open_loop_on_axis_strehl(diagnostics) ≈ 1.0f0
+    @test closed_loop_on_axis_strehl(diagnostics) ≈ 1.0f0
+    @test maximum(open_loop_psf(diagnostics)) <= 1.001f0
+    @test maximum(closed_loop_psf(diagnostics)) <= 1.001f0
+end
+
+if get(ENV, "REVOLT_CLASSIC_PYRTC_TESTS", "0") == "1"
+    include(joinpath(@__DIR__, "pyrtc", "test_revolt_classic_hil.jl"))
+end
