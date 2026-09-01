@@ -72,7 +72,7 @@ end
 
 """
     prepare_calibration_system(; profile=:grid_gaussian,
-        target=HostComputeDevice())
+        target=HostComputeDevice(), execution=StreamGraphExecution())
 
 Prepare a flat, noiseless REVOLT Classic graph for a simulation-local
 interaction matrix. It retains the selected provisional HSDM277 model and the
@@ -82,8 +82,9 @@ calibration.
 function prepare_calibration_system(;
     profile::Symbol=:grid_gaussian,
     target=HostComputeDevice(),
+    execution=StreamGraphExecution(),
 )
-    production = _graph_definition(profile)
+    production = _graph_definition(profile, target)
     length(production.nodes) == 5 || error(
         "the maintained REVOLT Classic HIL graph must contain five nodes",
     )
@@ -91,7 +92,10 @@ function prepare_calibration_system(;
     composition = production.nodes[3]
     shwfs = production.nodes[4]
     detector = _calibration_detector(production.nodes[5])
-    uncompensated_opd = zeros(Float32, _PUPIL_RESOLUTION, _PUPIL_RESOLUTION)
+    uncompensated_opd = _copy_to_target(
+        target,
+        zeros(Float32, _PUPIL_RESOLUTION, _PUPIL_RESOLUTION),
+    )
     definition = algorithm_graph(
         (pdm, composition, shwfs, detector);
         name=:revolt_classic_hil_calibration,
@@ -119,7 +123,7 @@ function prepare_calibration_system(;
         ),
         parameters=production.parameters,
     )
-    graph = prepare_algorithm_graph(definition; target)
+    graph = prepare_algorithm_graph(definition; target, execution)
     boundary = prepare_graph_hil_boundary(
         graph;
         command_input=:pdm_command,

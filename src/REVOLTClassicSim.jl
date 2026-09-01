@@ -2,7 +2,7 @@
 module REVOLTClassicSim
 
 using AdaptiveOpticsSim.AlgorithmGraphs
-using AdaptiveOpticsSim.Backends: HostComputeDevice
+using AdaptiveOpticsSim.Backends: HostComputeDevice, allocate_device_array
 
 include("hsdm277.jl")
 include("graphs.jl")

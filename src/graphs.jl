@@ -29,27 +29,48 @@ end
 rtc_reference_graph_path() =
     joinpath(_GRAPH_DIRECTORY, "revolt_classic_rtc_reference.toml")
 
-function _graph_bindings(profile::Symbol)
-    pdm_command = zeros(Float32, command_count())
+function _copy_to_target(target, values::AbstractArray)
+    target_values = allocate_device_array(
+        target,
+        eltype(values),
+        size(values)...,
+    )
+    copyto!(target_values, values)
+    return target_values
+end
+
+function _graph_bindings(profile::Symbol, target)
+    pdm_command = _copy_to_target(
+        target,
+        zeros(Float32, command_count()),
+    )
     if profile === :coordinate_gaussian
-        return (; pdm_command, pdm_actuator_coordinates=actuator_coordinates())
+        pdm_actuator_coordinates = _copy_to_target(
+            target,
+            actuator_coordinates(),
+        )
+        return (; pdm_command, pdm_actuator_coordinates)
     elseif profile === :grid_gaussian
-        return (; pdm_command, pdm_actuator_grid_indices=actuator_grid_indices())
+        pdm_actuator_grid_indices = _copy_to_target(
+            target,
+            actuator_grid_indices(),
+        )
+        return (; pdm_command, pdm_actuator_grid_indices)
     end
     graph_path(profile)
     error("unreachable REVOLT Classic profile")
 end
 
-function _graph_definition(profile::Symbol)
+function _graph_definition(profile::Symbol, target)
     return load_algorithm_graph(
         graph_path(profile);
-        bindings=_graph_bindings(profile),
+        bindings=_graph_bindings(profile, target),
     )
 end
 
 """
     prepare_hil_system(; profile=:grid_gaussian,
-        target=HostComputeDevice())
+        target=HostComputeDevice(), execution=StreamGraphExecution())
 
 Prepare the atmosphere-backed REVOLT Classic detector graph and its serialized
 277-command/352×352-frame HIL boundary. The returned command and frame buffers
@@ -58,8 +79,13 @@ remain owned by the prepared boundary.
 function prepare_hil_system(;
     profile::Symbol=:grid_gaussian,
     target=HostComputeDevice(),
+    execution=StreamGraphExecution(),
 )
-    graph = prepare_algorithm_graph(_graph_definition(profile); target)
+    graph = prepare_algorithm_graph(
+        _graph_definition(profile, target);
+        target,
+        execution,
+    )
     boundary = prepare_graph_hil_boundary(
         graph;
         command_input=:pdm_command,

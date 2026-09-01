@@ -1,7 +1,8 @@
 # REVOLTClassicSim.jl
 
 `REVOLTClassicSim.jl` is the instrument-level REVOLT Classic simulation built
-on [AdaptiveOpticsSim.jl](../AdaptiveOpticsSim.jl). It owns the Classic
+on [AdaptiveOpticsSim.jl](https://github.com/DarrylGamroth/AdaptiveOpticsSim.jl).
+It owns the Classic
 Shack–Hartmann sensor graph, C-BLUE One IMX425 model, HSDM277 command geometry,
 external-RTC boundary, and instrument-specific validation.
 
@@ -16,6 +17,18 @@ present in the maintained unit configuration remain published-typical IMX425
 values and are labeled accordingly in the graph files.
 
 ## Local use
+
+Until these development packages are registered, clone AOS and this package as
+sibling directories so the checked-in `[sources]` entry resolves:
+
+```bash
+mkdir revolt-classic-work
+cd revolt-classic-work
+git clone https://github.com/DarrylGamroth/AdaptiveOpticsSim.jl.git
+git clone https://github.com/DarrylGamroth/REVOLTClassicSim.jl.git
+cd REVOLTClassicSim.jl
+julia --startup-file=no --project=. -e 'using Pkg; Pkg.instantiate()'
+```
 
 ```julia
 using REVOLTClassicSim
@@ -54,3 +67,29 @@ REVOLT_CLASSIC_PYRTC_TESTS=1 julia --startup-file=no --project=. \
 
 The Python environment is not part of the package runtime and the test is not
 run by default because it generates a full simulated interaction matrix.
+
+## Frame-service benchmark
+
+The package benchmark measures the serialized HIL service boundary: one
+complete evolving-atmosphere graph step through a host-visible detector frame,
+followed by immediate adoption of a zero RTC command. RTC computation and
+fixed-arrival queueing are intentionally excluded. Run it with one Julia
+thread; select `cpu`, `amdgpu`, or `cuda`:
+
+```bash
+julia --startup-file=no --project=benchmark \
+  -e 'using Pkg; Pkg.instantiate()'
+
+REVOLT_BENCH_BACKEND=cpu \
+REVOLT_BENCH_SAMPLES=20 \
+REVOLT_BENCH_RUNS=3 \
+REVOLT_BENCH_OUTPUT=/tmp/revolt-classic-cpu.toml \
+JULIA_NUM_THREADS=1 \
+  julia --startup-file=no --project=benchmark benchmark/frame_service.jl
+```
+
+The TOML artifact records raw samples, preparation, warmed Julia allocation,
+p50/p90 (and p99 only with at least 100 samples), mean frame and cycle rates,
+source revisions, dirty state, runtime versions, hardware, affinity, and power
+policy. These are self-paced service-cost measurements, not fixed-rate
+deadline claims.
