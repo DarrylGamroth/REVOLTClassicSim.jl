@@ -1,0 +1,212 @@
+# Executable REVOLT Classic RTC-reference path from a simulated pupil OPD
+# through diffractive SHWFS, C-BLUE One IMX425 acquisition, calibrated
+# centroid selection,
+# dense reconstruction, and closed-loop correction stages.
+#
+# This is intentionally not the complete REVOLT Classic simulation or RTC
+# graph. Atmosphere propagation supplies the externally bound pupil OPD, while
+# the caller supplies the authoritative valid-subaperture mask and centroid
+# reference signal. The caller also converts the authoritative detector ROI
+# artifact into the one-based AOS lenslet order used by the final selection
+# node and binds the calibrated 221x376 reconstruction matrix. Optical values
+# follow REVOLT/Python/specula/params_revolt_modal.yml. Detector identity, ROI,
+# cadence, exposure, and gain follow the maintained HEART REVOLT configuration;
+# the other IMX425 values are published typical characterization. The AOS/OOPAO
+# centroid cutoff
+# below is not SPECULA's absolute-pedestal thr_value; that extraction policy
+# remains a numerical-parity gap, so executing the matrix does not yet claim
+# operational reconstructor compatibility. The explicit RNG seed is an AOS
+# reproducibility choice because the source file does not declare one. Until a
+# downstream command-constraint/DM path is present, the caller also supplies
+# the preceding demanded-minus-realized correction feedback. Its initial value
+# is a required placeholder and is ignored by the controller's first step.
+
+schema_version = 1
+name = "revolt_classic_rtc_reference"
+
+[[nodes]]
+name = "shwfs"
+type = "shack_hartmann_rate_f32"
+
+[nodes.config]
+resolution = 240
+telescope_diameter_m = 1.22
+central_obstruction_ratio = 0.20491803278688525
+pupil_reflectivity = 1.0
+aperture_revision = 1
+n_lenslets = 16
+n_pix_subap = 22
+diffraction_padding = 2
+pixel_scale_arcsec = 0.697
+valid_subaperture_threshold = 0.1
+threshold_convolution = 0.05
+half_pixel_shift = false
+shannon_sampling = true
+source_band = "R"
+source_magnitude = 2.0
+source_wavelength_m = 8.0e-7
+source_separation_arcsec = 0.0
+source_position_angle_deg = 0.0
+opd_schema = "org.revolt.classic.pupil-opd.f32/1"
+photon_rate_schema = "org.revolt.classic.shwfs-photon-rate.f32/1"
+
+[[nodes]]
+name = "detector"
+type = "cmos_detector_acquisition_f32"
+
+[nodes.config]
+rows = 352
+columns = 352
+binning = 1
+pixel_scale_arcsec = 0.697
+wavelength_m = 8.0e-7
+exposure_duration_s = 0.001896
+# Approximate typical IMX425 QE at the modeled 800 nm channel.
+quantum_efficiency = 0.27
+# Linear voltage gain corresponding to the maintained 24 dB setting.
+gain = 15.848931924611133
+dark_current_e_per_pixel_s = 0.96
+# Published 12-bit high-sensitivity characterization; HEART does not state the
+# operational pixel format in the maintained configuration snapshot.
+bits = 12
+# Published zero-gain image full well, also used as this model's ADC scale.
+full_well_e = 94000.0
+photon_noise = true
+readout_noise = true
+readout_noise_e = 2.33
+column_readout_noise_e = 0.0
+row_readout_noise_e = 0.0
+rng_seed = 0
+photon_rate_schema = "org.revolt.classic.shwfs-photon-rate.f32/1"
+frame_schema = "org.revolt.classic.shwfs-frame.f32/1"
+
+[[nodes]]
+name = "centroid"
+type = "shack_hartmann_centroid_f32"
+
+[nodes.config]
+resolution = 240
+telescope_diameter_m = 1.22
+n_lenslets = 16
+n_pix_subap = 22
+centroid_cutoff_fraction = 0.01
+centroid_response = 1.0
+calibration_wavelength_m = 8.0e-7
+calibration_signature = 1
+frame_schema = "org.revolt.classic.shwfs-frame.f32/1"
+slopes_schema = "org.revolt.classic.shwfs-centroid-slopes.f32/1"
+valid_subapertures_schema = "org.revolt.classic.shwfs-valid-subapertures.bool/1"
+reference_signal_schema = "org.revolt.classic.shwfs-centroid-reference.f32/1"
+
+[[nodes]]
+name = "slope_selection"
+type = "shack_hartmann_slope_selection_f32"
+
+[nodes.config]
+n_lenslets = 16
+selected_lenslet_count = 188
+full_slopes_schema = "org.revolt.classic.shwfs-centroid-slopes.f32/1"
+selected_slopes_schema = "org.revolt.classic.shwfs-selected-centroid-slopes.f32/1"
+lenslet_order_schema = "org.revolt.classic.shwfs-lenslet-order.u32/1"
+
+[[nodes]]
+name = "reconstruction"
+type = "control_matrix_reconstruction_f32"
+
+[nodes.config]
+slope_count = 376
+reconstructed_count = 221
+slopes_schema = "org.revolt.classic.shwfs-selected-centroid-slopes.f32/1"
+reconstructed_schema = "org.revolt.classic.controller-residual-error.f32/1"
+control_matrix_schema = "org.revolt.classic.shwfs-control-matrix.f32/1"
+
+[[nodes]]
+name = "controller"
+type = "closed_loop_correction_f32"
+
+[nodes.config]
+extent = 221
+residual_error_schema = "org.revolt.classic.controller-residual-error.f32/1"
+constraint_feedback_schema = "org.revolt.classic.controller-constraint-feedback.f32/1"
+correction_schema = "org.revolt.classic.controller-command.f32/1"
+controller_state_schema = "org.revolt.classic.controller-state.f32/1"
+
+[nodes.props]
+gain = -0.3
+pole = 0.99
+anti_windup_gain = 1.0
+
+[[inputs]]
+name = "pupil_opd"
+destination = "shwfs.opd"
+binding = "pupil_opd"
+
+[[inputs]]
+name = "controller_constraint_feedback"
+destination = "controller.constraint_feedback"
+binding = "controller_constraint_feedback"
+
+[[outputs]]
+name = "shwfs_photon_rate"
+source = "shwfs.photon_rate"
+
+[[outputs]]
+name = "shwfs_frame"
+source = "detector.frame"
+
+[[outputs]]
+name = "shwfs_full_slopes"
+source = "centroid.slopes"
+
+[[outputs]]
+name = "shwfs_selected_slopes"
+source = "slope_selection.selected_slopes"
+
+[[outputs]]
+name = "controller_residual_error"
+source = "reconstruction.reconstructed"
+
+[[outputs]]
+name = "controller_correction"
+source = "controller.correction"
+
+[[outputs]]
+name = "controller_state"
+source = "controller.controller_state"
+
+[[links]]
+source = "shwfs.photon_rate"
+destination = "detector.photon_rate"
+
+[[links]]
+source = "detector.frame"
+destination = "centroid.frame"
+
+[[links]]
+source = "centroid.slopes"
+destination = "slope_selection.full_slopes"
+
+[[links]]
+source = "slope_selection.selected_slopes"
+destination = "reconstruction.slopes"
+
+[[links]]
+source = "reconstruction.reconstructed"
+destination = "controller.residual_error"
+
+[[parameters]]
+destination = "centroid.valid_subapertures"
+binding = "valid_subapertures"
+
+[[parameters]]
+destination = "centroid.reference_signal"
+binding = "reference_signal"
+
+[[parameters]]
+destination = "reconstruction.control_matrix"
+binding = "reconstruction_matrix"
+
+[[parameters]]
+destination = "slope_selection.lenslet_order"
+binding = "lenslet_order"
+
