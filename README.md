@@ -68,6 +68,13 @@ REVOLT_CLASSIC_PYRTC_TESTS=1 julia --startup-file=no --project=. \
 The Python environment is not part of the package runtime and the test is not
 run by default because it generates a full simulated interaction matrix.
 
+With the pinned pyRTC revision and deterministic SplitMix64 atmosphere seed,
+the maintained gate retains 235 of 277 interaction directions at its 2%
+singular-value cutoff. Over 500 atmospheric frames, the steady-state mean
+on-axis Strehl increases from 0.0703 to 0.452 and pupil OPD RMS decreases from
+262 nm to 106 nm. These values are regression references for this simulated
+instrument, not measured REVOLT Classic performance.
+
 ## Frame-service benchmark
 
 The package benchmark measures the serialized HIL service boundary: one
