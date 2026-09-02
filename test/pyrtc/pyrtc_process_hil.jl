@@ -26,7 +26,6 @@ struct PyRTCProcessDefinition
     gain::Float32
     control_rcond::Float32
     iterations::Int
-    convergence_limit::Float32
 end
 
 @inline process_definition() = PyRTCProcessDefinition(
@@ -40,7 +39,6 @@ end
     0.2f0,
     2.0f-2,
     500,
-    0.1f0,
 )
 
 @inline prepare_calibration_system(::PyRTCProcessDefinition) =
@@ -472,7 +470,7 @@ function close_atmospheric_loop!(
     streams::ProcessStreams,
     definition::PyRTCProcessDefinition,
     signal::Vector{Float32};
-    frames::Int=ATMOSPHERE_VALIDATION_FRAMES,
+    frames::Int=definition.iterations,
 )
     frames > ATMOSPHERE_VALIDATION_BURN_IN_FRAMES || throw(ArgumentError(
         "atmosphere validation requires more than " *
