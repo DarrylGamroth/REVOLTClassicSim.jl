@@ -75,6 +75,23 @@ on-axis Strehl increases from 0.0703 to 0.452 and pupil OPD RMS decreases from
 262 nm to 106 nm. These values are regression references for this simulated
 instrument, not measured REVOLT Classic performance.
 
+### Live pyRTC viewer
+
+With the same isolated pyRTC environment active, launch the actual REVOLT
+Classic closed loop and its eight-pane viewer with:
+
+```bash
+export PYRTC_PYTHON="$PWD/.venv-pyrtc/bin/python"
+julia --startup-file=no --project=. \
+  test/pyrtc/run_revolt_classic_viewer.jl 300 10
+```
+
+The arguments are duration in seconds and requested HIL frame rate. The viewer
+shows the 352×352 C-BLUE One frame, pyRTC slope product, physical 19×19
+HSDM277 command map, uncompensated atmosphere OPD, PDM surface OPD, residual
+OPD, and the open-loop and corrected science PSFs. Close the viewer window to
+stop before the requested duration.
+
 ## Frame-service benchmark
 
 The package benchmark measures the serialized HIL service boundary: one
