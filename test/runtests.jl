@@ -35,8 +35,6 @@ end
         "revolt_classic_hil_grid_gaussian.toml"
     @test basename(graph_path(:coordinate_gaussian)) ==
         "revolt_classic_hil_coordinate_gaussian.toml"
-    @test basename(rtc_reference_graph_path()) ==
-        "revolt_classic_rtc_reference.toml"
     @test_throws ArgumentError graph_path(:unknown)
 
     for profile in supported_profiles()

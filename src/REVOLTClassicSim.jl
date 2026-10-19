@@ -24,7 +24,6 @@ export prepare_hil_system
 export prepare_science_diagnostics
 export provisional_gaussian_influence_width
 export provisional_mechanical_coupling
-export rtc_reference_graph_path
 export science_pupil_support
 export supported_profiles
 export update_science_diagnostics!

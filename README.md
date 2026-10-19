@@ -18,16 +18,17 @@ values and are labeled accordingly in the graph files.
 
 ## Local use
 
-Until these development packages are registered, clone AOS and this package as
-sibling directories so the checked-in `[sources]` entry resolves:
+The simulation uses registered AdaptiveOpticsSim 0.2. Add General and the
+package registry, then instantiate this checkout with Julia 1.12:
 
 ```bash
-mkdir revolt-classic-work
-cd revolt-classic-work
-git clone https://github.com/DarrylGamroth/AdaptiveOpticsSim.jl.git
 git clone https://github.com/DarrylGamroth/REVOLTClassicSim.jl.git
 cd REVOLTClassicSim.jl
-julia --startup-file=no --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --startup-file=no --project=. -e '
+using Pkg
+Pkg.Registry.add("General")
+Pkg.Registry.add(Pkg.RegistrySpec(url="https://github.com/DarrylGamroth/PackageRegistry.git"))
+Pkg.instantiate()'
 ```
 
 ```julia
@@ -47,8 +48,14 @@ frame.
 ## Validation
 
 ```bash
-julia --startup-file=no --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+JULIA_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 julia --startup-file=no --project=. \
+  -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 ```
+
+The default suite checks the physical instrument graphs without launching
+Python or requiring a pyRTC installation. The plant-only HIL graphs connect to
+an external RTC through AdaptiveOpticsSimPipeWireHIL; REVOLTRTC supplies the
+shared Classic/Copper PipeWireAO deployment and the FGA/JFG controller graph.
 
 The opt-in process test calibrates this package's complete 277-command model
 and closes its atmospheric loop through an independent pyRTC process using

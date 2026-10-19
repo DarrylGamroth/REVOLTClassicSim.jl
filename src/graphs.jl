@@ -25,10 +25,6 @@ function graph_path(profile::Symbol=:grid_gaussian)
     return joinpath(_GRAPH_DIRECTORY, _graph_filename(Val(profile)))
 end
 
-"""Return the REVOLT Classic in-process RTC-reference graph path."""
-rtc_reference_graph_path() =
-    joinpath(_GRAPH_DIRECTORY, "revolt_classic_rtc_reference.toml")
-
 function _copy_to_target(target, values::AbstractArray)
     target_values = allocate_device_array(
         target,
