@@ -45,6 +45,49 @@ produces one complete 352×352 detector frame per step. A serialized external
 RTC may return one complete 277-element command for adoption before the next
 frame.
 
+## Shared PipeWire HIL transport
+
+The optional transport uses `AdaptiveOpticsSimPipeWireHIL` and `PipeWireAO`.
+Install those packages in the application environment, then attach the shared
+adapter to the prepared plant:
+
+```julia
+using REVOLTClassicSim
+using AdaptiveOpticsSim.AlgorithmGraphs
+using AdaptiveOpticsSim.Backends: HostComputeDevice
+using AdaptiveOpticsSimPipeWireHIL
+using PipeWireAO
+
+system = REVOLTClassicSim.prepare_hil_system(;
+    target=HostComputeDevice(), execution=StreamGraphExecution())
+configuration = REVOLTClassicSim.pipewire_configuration(system, "rtc-private";
+    frame_node_name="revolt-classic-wfs", command_node_name="revolt-classic-command")
+transport = AdaptiveOpticsSimPipeWireHIL.prepare_pipewire_hil(system.boundary, configuration)
+# The application owns start!(transport), exchange_frame!(transport), and close(transport).
+```
+
+The defaults publish the 352×352 Float32 scientific detector schema
+`org.revolt.classic.shwfs-frame.f32/1` and receive 277 Float32 HSDM277
+surface-OPD commands in metres. The atmosphere advances by 2 ms per frame
+(500 Hz); the detector exposure is 1.896 ms. Configuration reads these
+values from the prepared plant and checks its boundary bindings. It does not
+rebuild the plant. Native, HEART, and pyRTC controllers connect through the
+ordinary PipeWireAO routes using compatible schemas, independently of this
+plant package.
+
+Operational UInt16 ADC frames require an explicit `frame_encoding=:uint16`
+and `frame_schema="org.calculon.ao.raw-detector-pixels/1"`. Micrometre OPD commands
+require both `command_schema="org.calculon.ao.demanded-pdm-command/1"`
+and `command_scale=1f-6`; conversion is confined to transport. Float32 frame
+schemas and metre commands remain the default scientific contract.
+
+The optional configuration checks run in their own dependency environment:
+
+```bash
+JULIA_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 julia --startup-file=no --project=test/pipewire \
+  -e 'using Pkg; Pkg.instantiate(); include("test/pipewire/runtests.jl")'
+```
+
 ## Validation
 
 ```bash
