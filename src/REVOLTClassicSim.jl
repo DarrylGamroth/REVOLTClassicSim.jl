@@ -4,9 +4,9 @@ module REVOLTClassicSim
 using AdaptiveOpticsSim.AlgorithmGraphs
 using AdaptiveOpticsSim.Backends: HostComputeDevice, allocate_device_array
 
-include("hsdm277.jl")
+include("parameters.jl")
+include("geometry.jl")
 include("graphs.jl")
-include("hil.jl")
 include("science_diagnostics.jl")
 
 export actuator_coordinates
