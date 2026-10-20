@@ -1,6 +1,7 @@
 using Test
 
-include(joinpath(@__DIR__, "pyrtc_process_hil.jl"))
+isdefined(@__MODULE__, :PyRTCProcessHIL) ||
+    include(joinpath(@__DIR__, "pyrtc_process_hil.jl"))
 using .PyRTCProcessHIL
 
 @testset "REVOLT Classic viewer command geometry" begin

@@ -150,6 +150,8 @@ end
     @test graph_pupil.opd == graph_opd
 end
 
+include(joinpath(@__DIR__, "pyrtc", "test_aoc_calibration.jl"))
+
 if get(ENV, "REVOLT_CLASSIC_PYRTC_TESTS", "0") == "1"
     include(joinpath(@__DIR__, "pyrtc", "test_revolt_classic_hil.jl"))
 end

@@ -11,6 +11,7 @@ import numpy as np
 
 
 CONTROL_PREFIX = "REVOLT_CLASSIC_PYRTC_WORKER "
+CONTROL_MATRIX_NUMPY_RELATIVE_TOLERANCE = 2e-5
 
 
 def control(message: str) -> None:
@@ -146,12 +147,33 @@ def compute_signal(slopes, order, ordered_signal) -> None:
     slopes.signal.write(ordered_signal)
 
 
+def configure_control_matrix(
+    loop,
+    matrix_path: str,
+    gain: float,
+) -> None:
+    matrix = np.fromfile(matrix_path, dtype=np.float32)
+    expected = loop.signalSize * loop.numModes
+    if matrix.size != expected:
+        raise ValueError(
+            f"control matrix contains {matrix.size} values; expected {expected}"
+        )
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("control matrix must contain only finite values")
+    if not np.isfinite(gain):
+        raise ValueError("control gain must be finite")
+    loop.CM[:] = matrix.reshape((loop.numModes, loop.signalSize), order="F")
+    loop.numActiveModes = loop.numModes
+    loop.setGain(gain)
+
+
 def configure_loop(
     loop,
     matrix_path: str,
     gain: float,
     control_rcond: float,
 ) -> None:
+    """Retain the historical pyRTC-owned pseudoinverse configuration path."""
     matrix = np.fromfile(matrix_path, dtype=np.float32)
     expected = loop.signalSize * loop.numModes
     if matrix.size != expected:
@@ -165,6 +187,50 @@ def configure_loop(
     loop.CM[:] = np.linalg.pinv(loop.IM, rcond=control_rcond)
     loop.fIM = np.copy(loop.IM)
     loop.setGain(gain)
+
+
+def verify_control_matrix(
+    loop,
+    interaction_path: str,
+    control_path: str,
+    control_rcond: float,
+) -> None:
+    """Check a caller-prepared control matrix against NumPy's historic path."""
+    expected_size = loop.signalSize * loop.numModes
+    interaction = np.fromfile(interaction_path, dtype=np.float32)
+    control_matrix = np.fromfile(control_path, dtype=np.float32)
+    if interaction.size != expected_size:
+        raise ValueError(
+            f"interaction matrix contains {interaction.size} values; "
+            f"expected {expected_size}"
+        )
+    if control_matrix.size != expected_size:
+        raise ValueError(
+            f"control matrix contains {control_matrix.size} values; "
+            f"expected {expected_size}"
+        )
+    if not np.all(np.isfinite(interaction)):
+        raise ValueError("interaction matrix must contain only finite values")
+    if not np.all(np.isfinite(control_matrix)):
+        raise ValueError("control matrix must contain only finite values")
+    if not np.isfinite(control_rcond) or not 0 <= control_rcond < 1:
+        raise ValueError("control rcond must be finite and lie in [0, 1)")
+    interaction = interaction.reshape((loop.signalSize, loop.numModes), order="F")
+    control_matrix = control_matrix.reshape(
+        (loop.numModes, loop.signalSize), order="F"
+    )
+    expected = np.linalg.pinv(interaction, rcond=control_rcond)
+    difference = control_matrix - expected
+    relative_error = np.linalg.norm(difference) / np.linalg.norm(expected)
+    if relative_error > CONTROL_MATRIX_NUMPY_RELATIVE_TOLERANCE:
+        maximum_absolute_error = np.max(np.abs(difference))
+        raise ValueError(
+            "prepared control matrix disagrees with NumPy pseudoinverse "
+            "beyond the Float32 SVD relative tolerance "
+            f"{CONTROL_MATRIX_NUMPY_RELATIVE_TOLERANCE}: "
+            f"relative error={relative_error}, "
+            f"maximum absolute error={maximum_absolute_error}"
+        )
 
 
 def serve(
@@ -205,6 +271,21 @@ def serve(
                     float(command[3]),
                 )
                 control("CONFIGURED")
+            elif command[0] == "VERIFY_CONTROL_MATRIX" and len(command) == 4:
+                verify_control_matrix(
+                    loop,
+                    command[1],
+                    command[2],
+                    float(command[3]),
+                )
+                control("CONTROL_MATRIX_VERIFIED")
+            elif command[0] == "CONFIGURE_CONTROL_MATRIX" and len(command) == 3:
+                configure_control_matrix(
+                    loop,
+                    command[1],
+                    float(command[2]),
+                )
+                control("CONTROL_MATRIX_CONFIGURED")
             elif command[0] == "FLATTEN" and len(command) == 1:
                 loop.flatten()
                 control("FLATTENED")

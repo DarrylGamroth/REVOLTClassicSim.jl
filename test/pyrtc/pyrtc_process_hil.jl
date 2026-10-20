@@ -1,5 +1,8 @@
 module PyRTCProcessHIL
 
+using AdaptiveOpticsCalibration
+using AdaptiveOpticsCalibration.InteractionMatrices
+using AdaptiveOpticsCalibration.Reconstructors
 using AdaptiveOpticsSim.AlgorithmGraphs
 using LinearAlgebra
 import REVOLTClassicSim
@@ -468,7 +471,7 @@ function process_frame!(
     worker::PyRTCWorker,
     streams::ProcessStreams,
     frame::AbstractMatrix{Float32},
-    signal::Vector{Float32};
+    signal::AbstractVector{Float32};
     command::AbstractString="PROCESS",
     response::AbstractString="PROCESSED",
 )
@@ -502,7 +505,13 @@ function set_flat_reference!(
     return sequence, copy(signal)
 end
 
-function calibrate_interaction_matrix!(
+"""
+Acquire one complete ordered zonal push-pull response cycle.
+
+Rows `2i - 1` and `2i` hold the positive and negative response respectively
+for HSDM277 command `i`; columns retain pyRTC's interleaved x/y slope order.
+"""
+function acquire_push_pull_responses!(
     worker::PyRTCWorker,
     streams::ProcessStreams,
     prepared,
@@ -517,58 +526,200 @@ function calibrate_interaction_matrix!(
         prepared,
         signal,
     )
-    interaction_matrix = Matrix{Float32}(
+    responses = Matrix{Float32}(
         undef,
+        2 * length(hil_command_buffer(boundary)),
         length(signal),
-        length(hil_command_buffer(boundary)),
     )
-    positive_signal = similar(signal)
 
-    for command_index in axes(interaction_matrix, 2)
+    for command_index in axes(hil_command_buffer(boundary), 1)
         if report_progress && (command_index == 1 ||
                 command_index % 25 == 0 ||
-                command_index == last(axes(interaction_matrix, 2)))
+                command_index == last(axes(hil_command_buffer(boundary), 1)))
             println(
                 "  calibrated command ",
                 command_index,
                 " / ",
-                size(interaction_matrix, 2),
+                length(hil_command_buffer(boundary)),
             )
         end
         fill!(hil_command_buffer(boundary), 0.0f0)
         hil_command_buffer(boundary)[command_index] = poke
         adopt_hil_command!(boundary, sequence)
         sequence = step_hil_frame!(boundary)
-        copyto!(
-            positive_signal,
-            process_frame!(
-                worker,
-                streams,
-                hil_frame_buffer(boundary),
-                signal,
-            ),
+        process_frame!(
+            worker,
+            streams,
+            hil_frame_buffer(boundary),
+            @view(responses[2 * command_index - 1, :]),
         )
 
         fill!(hil_command_buffer(boundary), 0.0f0)
         hil_command_buffer(boundary)[command_index] = -poke
         adopt_hil_command!(boundary, sequence)
         sequence = step_hil_frame!(boundary)
-        negative_signal = process_frame!(
+        process_frame!(
             worker,
             streams,
             hil_frame_buffer(boundary),
-            signal,
+            @view(responses[2 * command_index, :]),
         )
-        @views @. interaction_matrix[:, command_index] =
-            (positive_signal - negative_signal) / (2 * poke)
     end
 
     fill!(hil_command_buffer(boundary), 0.0f0)
     adopt_hil_command!(boundary, sequence)
     reset_hil_boundary!(boundary)
-    return flat_signal, interaction_matrix
+    return flat_signal, responses
 end
 
+function direct_central_difference_interaction_matrix(
+    responses::AbstractMatrix{Float32},
+    poke::Float32,
+)
+    isfinite(poke) && poke > 0 || throw(ArgumentError(
+        "the zonal poke amplitude must be finite and positive",
+    ))
+    iseven(size(responses, 1)) || throw(DimensionMismatch(
+        "zonal push-pull responses must have one positive and one negative row " *
+        "per corrector coordinate",
+    ))
+    interaction_matrix = Matrix{Float32}(
+        undef,
+        size(responses, 2),
+        size(responses, 1) ÷ 2,
+    )
+    for command_index in axes(interaction_matrix, 2)
+        @views @. interaction_matrix[:, command_index] =
+            (responses[2 * command_index - 1, :] -
+             responses[2 * command_index, :]) / (2 * poke)
+    end
+    return interaction_matrix
+end
+
+function interaction_matrix_from_responses(
+    responses::AbstractMatrix{Float32},
+    poke::Float32,
+)
+    isfinite(poke) && poke > 0 || throw(ArgumentError(
+        "the zonal poke amplitude must be finite and positive",
+    ))
+    iseven(size(responses, 1)) || throw(DimensionMismatch(
+        "zonal push-pull responses must have one positive and one negative row " *
+        "per corrector coordinate",
+    ))
+    all(isfinite, responses) || throw(ArgumentError(
+        "zonal push-pull responses must be finite",
+    ))
+    corrector_count = size(responses, 1) ÷ 2
+    interaction_matrix_plan = AdaptiveOpticsCalibration.prepare(
+        ZonalPushPull(fill(poke, corrector_count)),
+        ResponseSpecification(size(responses, 2)),
+    )
+    result = AdaptiveOpticsCalibration.process(
+        interaction_matrix_plan,
+        responses,
+    )
+    return interaction_matrix(result)
+end
+
+function prepare_aoc_control_matrix(
+    responses::AbstractMatrix{Float32},
+    definition::PyRTCProcessDefinition,
+)
+    expected_response_shape = (
+        2 * definition.command_count,
+        only(definition.signal_shape),
+    )
+    size(responses) == expected_response_shape ||
+        throw(DimensionMismatch(
+            "REVOLT Classic push-pull responses must have shape " *
+            "$expected_response_shape",
+        ))
+    direct_interaction_matrix = direct_central_difference_interaction_matrix(
+        responses,
+        definition.poke,
+    )
+    aoc_interaction_matrix = interaction_matrix_from_responses(
+        responses,
+        definition.poke,
+    )
+    isapprox(aoc_interaction_matrix, direct_interaction_matrix; rtol=5f-6, atol=0f0) ||
+        error(
+            "AOC zonal push-pull interaction matrix disagrees with the " *
+            "direct central " *
+            "difference beyond Float32 rounding tolerance",
+        )
+
+    singular_values = svdvals(direct_interaction_matrix)
+    maximum_singular_value = maximum(singular_values)
+    retained_tolerance = maximum_singular_value * definition.control_rcond
+    retained_interaction_rank = count(>(retained_tolerance), singular_values)
+    retained_interaction_rank > 0 || error(
+        "the REVOLT Classic interaction matrix retains no control direction",
+    )
+
+    specification = ReconstructorSpecification(
+        size(aoc_interaction_matrix, 1),
+        size(aoc_interaction_matrix, 2),
+        Float32,
+    )
+    plan = AdaptiveOpticsCalibration.prepare(
+        StrokeWeightedTikhonov(
+            retained_interaction_rank;
+            tikhonov_scale=0,
+            rtol=definition.control_rcond,
+        ),
+        specification,
+    )
+    identity_noise = Matrix{Float32}(
+        I,
+        definition.signal_shape[1],
+        definition.signal_shape[1],
+    )
+    identity_stroke = Matrix{Float32}(
+        I,
+        definition.command_count,
+        definition.command_count,
+    )
+    inputs = StrokeWeightedReconstructorInputs(
+        aoc_interaction_matrix,
+        identity_noise,
+        identity_stroke,
+    )
+    result = AdaptiveOpticsCalibration.process(plan, inputs)
+    aoc_control_matrix = reconstructor(result)
+    direct_control_matrix = pinv(
+        direct_interaction_matrix;
+        rtol=definition.control_rcond,
+    )
+    isapprox(aoc_control_matrix, direct_control_matrix; rtol=5f-5, atol=0f0) ||
+        error(
+            "AOC zero-Tikhonov control matrix disagrees with the current " *
+            "truncated pseudoinverse beyond Float32 SVD tolerance",
+        )
+    result.diagnostics.numerical_rank == retained_interaction_rank || error(
+        "AOC reconstructor numerical rank $(result.diagnostics.numerical_rank) " *
+        "does not match the Classic 2% retained rank $retained_interaction_rank",
+    )
+
+    return (;
+        interaction_matrix=aoc_interaction_matrix,
+        control_matrix=aoc_control_matrix,
+        retained_interaction_rank,
+        retained_interaction_condition=
+            maximum_singular_value / singular_values[retained_interaction_rank],
+        numerical_interaction_condition=
+            maximum_singular_value / minimum(singular_values),
+        interaction_matrix_relative_error=
+            norm(aoc_interaction_matrix - direct_interaction_matrix) /
+            norm(direct_interaction_matrix),
+        control_matrix_relative_error=
+            norm(aoc_control_matrix - direct_control_matrix) /
+            norm(direct_control_matrix),
+    )
+end
+
+"""Configure pyRTC with the historical interaction-matrix pseudoinverse path."""
 function configure_worker_loop!(
     worker::PyRTCWorker,
     streams::ProcessStreams,
@@ -583,13 +734,65 @@ function configure_worker_loop!(
     end
     send_worker_command!(
         worker,
-        "CONFIGURE $matrix_path $(Float64(gain)) " *
-        "$(Float64(control_rcond))",
+        "CONFIGURE $matrix_path $(Float64(gain)) $(Float64(control_rcond))",
         "CONFIGURED";
         timeout=30.0,
     )
     send_worker_command!(worker, "FLATTEN", "FLATTENED")
     flat_command = zeros(Float32, size(interaction_matrix, 2))
+    read_next!(flat_command, streams.wfc; timeout=5.0)
+    all(iszero, flat_command) || error(
+        "pyRTC worker flatten command is nonzero",
+    )
+    return nothing
+end
+
+"""Check AOC control-matrix parity against the worker's NumPy pseudoinverse."""
+function verify_worker_control_matrix!(
+    worker::PyRTCWorker,
+    interaction_matrix::Matrix{Float32},
+    control_matrix::Matrix{Float32},
+    control_rcond::Float32,
+    temporary_directory::AbstractString,
+)
+    interaction_path = joinpath(temporary_directory, "interaction_matrix.f32")
+    control_path = joinpath(temporary_directory, "control_matrix.f32")
+    open(interaction_path, "w") do io
+        write(io, interaction_matrix)
+    end
+    open(control_path, "w") do io
+        write(io, control_matrix)
+    end
+    send_worker_command!(
+        worker,
+        "VERIFY_CONTROL_MATRIX $interaction_path $control_path " *
+        "$(Float64(control_rcond))",
+        "CONTROL_MATRIX_VERIFIED";
+        timeout=30.0,
+    )
+    return nothing
+end
+
+"""Configure pyRTC with a caller-prepared corrector-by-measurement matrix."""
+function configure_worker_control_matrix!(
+    worker::PyRTCWorker,
+    streams::ProcessStreams,
+    control_matrix::Matrix{Float32},
+    gain::Float32,
+    temporary_directory::AbstractString,
+)
+    matrix_path = joinpath(temporary_directory, "control_matrix.f32")
+    open(matrix_path, "w") do io
+        write(io, control_matrix)
+    end
+    send_worker_command!(
+        worker,
+        "CONFIGURE_CONTROL_MATRIX $matrix_path $(Float64(gain))",
+        "CONTROL_MATRIX_CONFIGURED";
+        timeout=30.0,
+    )
+    send_worker_command!(worker, "FLATTEN", "FLATTENED")
+    flat_command = zeros(Float32, size(control_matrix, 1))
     read_next!(flat_command, streams.wfc; timeout=5.0)
     all(iszero, flat_command) || error(
         "pyRTC worker flatten command is nonzero",
@@ -726,7 +929,7 @@ function run_revolt_classic_validation()
         try
             worker = start_worker(definition, temporary_directory)
             signal = zeros(Float32, definition.signal_shape)
-            flat_signal, interaction_matrix = calibrate_interaction_matrix!(
+            flat_signal, responses = acquire_push_pull_responses!(
                 worker,
                 streams,
                 calibration,
@@ -738,16 +941,14 @@ function run_revolt_classic_validation()
                 "REVOLT Classic flat reference left a nonzero residual: " *
                 "$(norm(flat_signal))",
             )
-            all(isfinite, interaction_matrix) || error(
-                "REVOLT Classic interaction matrix contains a non-finite value",
+            all(isfinite, responses) || error(
+                "REVOLT Classic push-pull responses contain a non-finite value",
             )
-
-            singular_values = svdvals(interaction_matrix)
-            maximum_singular_value = maximum(singular_values)
-            retained_tolerance =
-                maximum_singular_value * definition.control_rcond
-            retained_interaction_rank =
-                count(>(retained_tolerance), singular_values)
+            calibration_products = prepare_aoc_control_matrix(
+                responses,
+                definition,
+            )
+            retained_interaction_rank = calibration_products.retained_interaction_rank
             minimum_retained_rank = (4 * definition.command_count) ÷ 5
             retained_interaction_rank >= minimum_retained_rank || error(
                 "REVOLT Classic interaction matrix retains only " *
@@ -755,16 +956,19 @@ function run_revolt_classic_validation()
                 "$(definition.control_rcond); expected at least " *
                 "$minimum_retained_rank",
             )
-            retained_interaction_condition =
-                maximum_singular_value /
-                singular_values[retained_interaction_rank]
+            verify_worker_control_matrix!(
+                worker,
+                calibration_products.interaction_matrix,
+                calibration_products.control_matrix,
+                definition.control_rcond,
+                temporary_directory,
+            )
 
-            configure_worker_loop!(
+            configure_worker_control_matrix!(
                 worker,
                 streams,
-                interaction_matrix,
+                calibration_products.control_matrix,
                 definition.gain,
-                definition.control_rcond,
                 temporary_directory,
             )
             atmosphere = close_atmospheric_loop!(
@@ -792,9 +996,14 @@ function run_revolt_classic_validation()
                 signal_length=length(signal),
                 command_count=definition.command_count,
                 retained_interaction_rank,
-                retained_interaction_condition,
+                retained_interaction_condition=
+                    calibration_products.retained_interaction_condition,
                 numerical_interaction_condition=
-                    maximum_singular_value / minimum(singular_values),
+                    calibration_products.numerical_interaction_condition,
+                interaction_matrix_relative_error=
+                    calibration_products.interaction_matrix_relative_error,
+                control_matrix_relative_error=
+                    calibration_products.control_matrix_relative_error,
                 atmosphere...,
             )
         finally
@@ -887,7 +1096,7 @@ function run_revolt_classic_viewer(;
                 "Calibrating the pyRTC loop against the flat, noiseless " *
                 "REVOLT Classic system...",
             )
-            flat_signal, interaction_matrix = calibrate_interaction_matrix!(
+            flat_signal, responses = acquire_push_pull_responses!(
                 worker,
                 streams,
                 calibration,
@@ -898,13 +1107,14 @@ function run_revolt_classic_viewer(;
             all(isfinite, flat_signal) || error(
                 "pyRTC flat reference contains a non-finite signal",
             )
-            all(isfinite, interaction_matrix) || error(
-                "pyRTC interaction matrix contains a non-finite value",
+            all(isfinite, responses) || error(
+                "pyRTC push-pull responses contain a non-finite value",
             )
-            singular_values = svdvals(interaction_matrix)
-            retained_tolerance =
-                maximum(singular_values) * definition.control_rcond
-            retained_rank = count(>(retained_tolerance), singular_values)
+            calibration_products = prepare_aoc_control_matrix(
+                responses,
+                definition,
+            )
+            retained_rank = calibration_products.retained_interaction_rank
             retained_rank > 0 || error(
                 "the pyRTC interaction matrix retains no control direction",
             )
@@ -914,12 +1124,18 @@ function run_revolt_classic_viewer(;
                 " / ",
                 definition.command_count,
             )
-            configure_worker_loop!(
+            verify_worker_control_matrix!(
+                worker,
+                calibration_products.interaction_matrix,
+                calibration_products.control_matrix,
+                definition.control_rcond,
+                temporary_directory,
+            )
+            configure_worker_control_matrix!(
                 worker,
                 streams,
-                interaction_matrix,
+                calibration_products.control_matrix,
                 definition.gain,
-                definition.control_rcond,
                 temporary_directory,
             )
 
@@ -1055,6 +1271,14 @@ function revolt_classic_main()
     println(
         "  numerical interaction condition: ",
         result.numerical_interaction_condition,
+    )
+    println(
+        "  AOC/direct interaction-matrix relative error: ",
+        result.interaction_matrix_relative_error,
+    )
+    println(
+        "  AOC/direct control-matrix relative error: ",
+        result.control_matrix_relative_error,
     )
     println(
         "  atmospheric mean open-loop on-axis Strehl: ",
