@@ -4,6 +4,8 @@ using AdaptiveOpticsSim.AlgorithmGraphs
 using LinearAlgebra
 import REVOLTClassicSim
 
+include(joinpath(@__DIR__, "..", "science_analysis.jl"))
+
 include(joinpath(@__DIR__, "pyrtc_shared_memory.jl"))
 using .PyRTCSharedMemory
 
@@ -63,8 +65,9 @@ end
     REVOLTClassicSim.prepare_calibration_system()
 @inline prepare_atmospheric_system(::PyRTCProcessDefinition) =
     REVOLTClassicSim.prepare_hil_system()
-@inline prepare_science_diagnostics() =
-    REVOLTClassicSim.prepare_science_diagnostics()
+@inline prepare_science_analysis(prepared) =
+    prepare_science_analysis_fixture(
+        prepared.graph, Val(:shwfs); wavelength_m=750.0e-9)
 
 struct ProcessStreams{W,C,S,D}
     wfs::W
@@ -151,7 +154,7 @@ function close_process_streams!(streams::ProcessStreams)
     return nothing
 end
 
-function create_viewer_streams(prepared, diagnostics, command_display)
+function create_viewer_streams(prepared, science_fixture, command_display)
     occupied = String[]
     for name in VIEWER_STREAM_NAMES, suffix in ("", "_meta", "_gpu_handle")
         path = joinpath("/dev/shm", name * suffix)
@@ -192,8 +195,8 @@ function create_viewer_streams(prepared, diagnostics, command_display)
             eltype(residual_opd_values),
             size(residual_opd_values),
         )
-        open_loop_values = REVOLTClassicSim.open_loop_psf(diagnostics)
-        closed_loop_values = REVOLTClassicSim.closed_loop_psf(diagnostics)
+        open_loop_values = science_fixture.open_loop_psf
+        closed_loop_values = science_fixture.corrected_psf
         open_loop_psf_stream = create_stream(
             VIEWER_STREAM_NAMES[5],
             eltype(open_loop_values),
@@ -643,7 +646,7 @@ function close_atmospheric_loop!(
         "$(ATMOSPHERE_VALIDATION_BURN_IN_FRAMES) frames",
     ))
     prepared = prepare_atmospheric_system(definition)
-    diagnostics = prepare_science_diagnostics()
+    science_fixture = prepare_science_analysis(prepared)
     boundary = prepared.boundary
     command = zeros(Float32, definition.command_count)
     open_loop_values = Vector{Float32}(undef, frames)
@@ -651,29 +654,29 @@ function close_atmospheric_loop!(
     uncompensated_opd_rms_values = Vector{Float64}(undef, frames)
     residual_opd_rms_values = Vector{Float64}(undef, frames)
     pdm_command_rms_values = Vector{Float64}(undef, frames)
-    support = REVOLTClassicSim.science_pupil_support(diagnostics)
+    support = science_fixture.support
     sequence = step_hil_frame!(boundary)
 
     for frame_index in 1:frames
         atmosphere_opd = graph_output(prepared.graph, Val(:atmosphere_opd))
         residual_opd = graph_output(prepared.graph, Val(:pupil_opd))
-        REVOLTClassicSim.update_science_diagnostics!(
-            diagnostics,
+        strehl = update_science_analysis!(
+            science_fixture,
             atmosphere_opd,
             residual_opd,
         )
         open_loop_values[frame_index] =
-            REVOLTClassicSim.open_loop_on_axis_strehl(diagnostics)
+            strehl.open_loop
         closed_loop_values[frame_index] =
-            REVOLTClassicSim.closed_loop_on_axis_strehl(diagnostics)
+            strehl.corrected
         uncompensated_opd_rms_values[frame_index] =
             pupil_opd_rms(atmosphere_opd, support)
         residual_opd_rms_values[frame_index] =
             pupil_opd_rms(residual_opd, support)
-        maximum(REVOLTClassicSim.open_loop_psf(diagnostics)) <= 1.001f0 || error(
+        maximum(science_fixture.open_loop_psf) <= 1.001f0 || error(
             "open-loop PSF exceeds its exact diffraction-limited peak",
         )
-        maximum(REVOLTClassicSim.closed_loop_psf(diagnostics)) <= 1.001f0 || error(
+        maximum(science_fixture.corrected_psf) <= 1.001f0 || error(
             "closed-loop PSF exceeds its exact diffraction-limited peak",
         )
 
@@ -829,7 +832,7 @@ end
 function publish_viewer_outputs!(
     streams::ViewerStreams,
     prepared,
-    diagnostics,
+    science_fixture,
     applied_command_display::PreparedCommandDisplay,
 )
     graph = prepared.graph
@@ -848,11 +851,11 @@ function publish_viewer_outputs!(
     )
     publish!(
         streams.open_loop_psf,
-        REVOLTClassicSim.open_loop_psf(diagnostics),
+        science_fixture.open_loop_psf,
     )
     publish!(
         streams.closed_loop_psf,
-        REVOLTClassicSim.closed_loop_psf(diagnostics),
+        science_fixture.corrected_psf,
     )
     return nothing
 end
@@ -921,25 +924,25 @@ function run_revolt_classic_viewer(;
             )
 
             prepared = prepare_atmospheric_system(definition)
-            diagnostics = prepare_science_diagnostics()
+            science_fixture = prepare_science_analysis(prepared)
             viewer_streams = create_viewer_streams(
                 prepared,
-                diagnostics,
+                science_fixture,
                 applied_command_display,
             )
             boundary = prepared.boundary
             sequence = step_hil_frame!(boundary)
             atmosphere_opd = graph_output(prepared.graph, Val(:atmosphere_opd))
             residual_opd = graph_output(prepared.graph, Val(:pupil_opd))
-            REVOLTClassicSim.update_science_diagnostics!(
-                diagnostics,
+            strehl = update_science_analysis!(
+                science_fixture,
                 atmosphere_opd,
                 residual_opd,
             )
             publish_viewer_outputs!(
                 viewer_streams,
                 prepared,
-                diagnostics,
+                science_fixture,
                 applied_command_display,
             )
             viewer = start_viewer(frame_rate)
@@ -947,7 +950,7 @@ function run_revolt_classic_viewer(;
             next_frame_time = start_time
             next_status_time = start_time
             frame_period = inv(Float64(frame_rate))
-            support = REVOLTClassicSim.science_pupil_support(diagnostics)
+            support = science_fixture.support
 
             println(
                 "Running the REVOLT Classic AOS/pyRTC live view for ",
@@ -958,7 +961,7 @@ function run_revolt_classic_viewer(;
                 publish_viewer_outputs!(
                     viewer_streams,
                     prepared,
-                    diagnostics,
+                    science_fixture,
                     applied_command_display,
                 )
                 process_frame!(
@@ -986,15 +989,11 @@ function run_revolt_classic_viewer(;
                             digits=3,
                         ),
                         " nm RMS, on-axis Strehl=", round(
-                            REVOLTClassicSim.open_loop_on_axis_strehl(
-                                diagnostics,
-                            );
+                            strehl.open_loop;
                             digits=4,
                         ),
                         " -> ", round(
-                            REVOLTClassicSim.closed_loop_on_axis_strehl(
-                                diagnostics,
-                            );
+                            strehl.corrected;
                             digits=4,
                         ),
                         ", command=", round(
@@ -1022,8 +1021,8 @@ function run_revolt_classic_viewer(;
                     Val(:atmosphere_opd),
                 )
                 residual_opd = graph_output(prepared.graph, Val(:pupil_opd))
-                REVOLTClassicSim.update_science_diagnostics!(
-                    diagnostics,
+                strehl = update_science_analysis!(
+                    science_fixture,
                     atmosphere_opd,
                     residual_opd,
                 )
