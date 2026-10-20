@@ -14,7 +14,13 @@ profiles:
 
 Neither profile is a measured HSDM277 influence calibration. Camera values not
 present in the maintained unit configuration remain published-typical IMX425
-values and are labeled accordingly in the graph files.
+values and are labeled accordingly in the Julia graph builders.
+
+Instrument topology and the shared production/calibration prescription are
+constructed in Julia in [`src/graphs.jl`](src/graphs.jl). Both deformable-mirror
+profiles use the same scientific settings. TOML is reserved for experiment
+settings and calibration references; graph topology is defined by the Julia
+builders.
 
 ## Local use
 
@@ -70,7 +76,7 @@ The defaults publish the 352×352 Float32 scientific detector schema
 `org.revolt.classic.shwfs-frame.f32/1` and receive 277 Float32 HSDM277
 surface-OPD commands in metres. The atmosphere advances by 2 ms per frame
 (500 Hz); the detector exposure is 1.896 ms. Configuration reads these
-values from the prepared plant and checks its boundary bindings. It does not
+values from the prepared context and detector plan and checks its boundary bindings. It does not
 rebuild the plant. Native, HEART, and pyRTC controllers connect through the
 ordinary PipeWireAO routes using compatible schemas, independently of this
 plant package.
